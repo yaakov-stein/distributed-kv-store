@@ -8,6 +8,7 @@
 #include<functional>
 #include<unordered_set>
 #include<mutex>
+#include "Message.hpp"
 
 class Emulation {
 public:
@@ -29,7 +30,7 @@ public:
      * @param message The message to be sent.
      * @return True if the message was successfully queued, false otherwise.
      */
-    bool send(const std::string& receiverPid, const std::string& message);
+    bool send(const std::string& receiverPid, const Message& message);
 
     /**
      * Partitions the network, preventing processes in group A from communicating with processes in group B.
@@ -37,7 +38,7 @@ public:
      * @param groupBPids A set of process IDs in group B.
      * @return True if the partition was successful, false otherwise.
      */
-    bool partitionNetwork(const std::unordered_set<std::string> groupAPids, const std::unordered_set<std::string> groupBPids);
+    bool partitionNetwork(const std::unordered_set<std::string>& groupAPids, const std::unordered_set<std::string>& groupBPids);
 
     /**
      * Temporarily "kills" the process, marking it as inactive.
@@ -59,13 +60,13 @@ public:
      * @param groupBPids A set of process IDs in group B.
      * @return True if the connection was successful, false otherwise.
      */
-    bool connectNetwork(const std::unordered_set<std::string> groupAPids, const std::unordered_set<std::string> groupBPids);
+    bool connectNetwork(const std::unordered_set<std::string>& groupAPids, const std::unordered_set<std::string>& groupBPids);
 
     /**
      * Retrieves the next message from the current process's message queue.
      * @return The next message in the queue for the calling pid.
      */
-    const std::string& receiveMessage();
+    const Message receiveMessage();
 
     /**
      * Sets averageMessageDelay for all processes using this Emulation.
@@ -74,15 +75,15 @@ public:
     void setDelay(int delay);
 
 private:
-    std::unordered_map<std::string, std::queue<std::string>> messageQueueMap;
+    std::unordered_map<std::string, std::queue<Message>> messageQueueMap;
     std::unordered_map<std::string, std::vector<std::string>> reachableMap;
     std::unordered_map<std::string, bool> isDead;
     int averageMessageDelay;
 
-    mutable std::mutex messageQueueMapMutex;
-    mutable std::mutex reachableMapMutex;
-    mutable std::mutex isDeadMutex;
-    mutable std::mutex averageMessageDelayMutex;
+    std::mutex messageQueueMapMutex;
+    std::mutex reachableMapMutex;
+    std::mutex isDeadMutex;
+    std::mutex averageMessageDelayMutex;
 
     bool canSend(const std::string& receiverPid) const;
 };
