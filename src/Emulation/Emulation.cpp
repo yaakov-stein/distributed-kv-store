@@ -38,28 +38,27 @@ class Emulation {
         void spawn(PID pid, ProcessFunction fn) {
             {
                 std::lock_guard<std::mutex> lock(globalMutex);
-                // 各プロセスごとにメッセージキューを作成
+                // each process has its own message queue
                 messageQueueMap[pid] = std::make_shared<ProcessQueue>();
-                // 初期状態では、各プロセスの接続先リストは空。
-                // 必要に応じて connectNetwork() で接続を設定してください。
+                // each process has its own set of reachable processes
+                // set up connection on connectNetwork
                 reachableMap[pid] = {};
                 isDead[pid] = false;
             }
-            // プロセスは独立したスレッドで実行する
+            // create a new thread
             std::thread t([this, pid, fn]() {
-                currentPid = pid;  // スレッドローカルのプロセスIDを設定
-                fn();              // 指定された処理を実行
+                currentPid = pid;  // set up currentPid
+                fn();              // do the work
             });
-            t.detach();  // スレッドはデタッチ（join() はしない）
+            t.detach();
         }
     
         // whoami()
-        // 現在のプロセス（スレッド）のIDを返す
         PID whoami() {
             return currentPid;
         }
 
-        void send(PID receiverPid, const Message& message) {
+        bool send(PID receiverPid, const Message& message) {
             PID senderPid = currentPid;
             // check if the message can be sent
             if (!canSend(senderPid, receiverPid)) {
@@ -101,7 +100,24 @@ class Emulation {
                 std::lock_guard<std::mutex> lock(queuePtr->mtx);
                 queuePtr->queue.push({senderPid, message});
                 queuePtr->cv.notify_one();
+                return true;
             }
+            return false;
+
+        }
+
+        std::pair<PID, Message> receiveMessage() {
+            PID pid = currentPid;
+            // wait til process is alive
+            while (isProcessDead(pid)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            auto queuePtr = getProcessQueue(pid);
+            std::unique_lock<std::mutex> lock(queuePtr->mtx);
+            queuePtr->cv.wait(lock, [&]{ return !queuePtr->queue.empty(); });
+            auto msg = queuePtr->queue.front();
+            queuePtr->queue.pop();
+            return msg;
         }
         // broadcast(message)
         // current process broadcasts a message to all reachable processes
@@ -125,10 +141,46 @@ class Emulation {
             std::lock_guard<std::mutex> lock(globalMutex);
             if (isDead[sender] || isDead[receiver])
                 return false;
-            // reachableMap[sender] に receiver が存在する場合のみ送信可能
+            // reachableMap[sender] has to contain a receiver
             return (reachableMap[sender].find(receiver) != reachableMap[sender].end());
         }
+        void killProcess(PID pid) {
+            isDead[pid] = true;
+            std::cout << "[System] Killed process " << pid << "\n";
+        }
 
+        void reviveProcess(PID pid) {
+            isDead[pid] = false;
+            std::cout << "[System] Revived process " << pid << "\n";
+        }
+
+        void partitionNetwork(const std::vector<PID>& groupA, const std::vector<PID>& groupB) {
+            for (PID a : groupA) for (PID b : groupB) {
+                reachableMap[a].erase(b);
+                reachableMap[b].erase(a);
+            }
+            std::cout << "[Network] Partition applied between groups.\n";
+        }
+
+        void connectNetwork(const std::vector<PID>& groupA, const std::vector<PID>& groupB) {
+            for (PID a : groupA) for (PID b : groupB) {
+                reachableMap[a].insert(b);
+                reachableMap[b].insert(a);
+            }
+            std::cout << "[Network] Connection restored between groups.\n";
+        }
+
+        void injectNetworkDelay(PID a, PID b, int delayMs) {
+            customDelays[{a, b}] = delayMs;
+        }
+    
+        void injectNetworkLoss(PID a, PID b, double lossProbability) {
+            lossProbabilities[{a, b}] = lossProbability;
+        }
+    
+        void setAverageMessageDelay(int delayMs) {
+            averageMessageDelay = delayMs;
+        }
         private:
     
         // messeageque for each process
@@ -143,7 +195,8 @@ class Emulation {
     
         // access global var
         std::mutex globalMutex;
-    
+        // 
+        std::unordered_map<PID, std::mutex> queueMutex;
         // average message delay
         int averageMessageDelay;
         
@@ -154,6 +207,14 @@ class Emulation {
             std::lock_guard<std::mutex> lock(globalMutex);
             return isDead[pid];
         }
+        // get a process queue
+        std::shared_ptr<ProcessQueue> getProcessQueue(PID pid) {
+            std::lock_guard<std::mutex> lock(globalMutex);
+            auto it = messageQueueMap.find(pid);
+            if (it != messageQueueMap.end())
+                return it->second;
+            return nullptr;
+        }
         // random delay between 50% to 150% of the specified delay time
         int randomDelay(int delay) {
             static thread_local std::mt19937 generator(std::random_device{}());
@@ -161,7 +222,7 @@ class Emulation {
             return distribution(generator);
         }
 
-        // 指定した確率に基づき、メッセージをドロップするかを判定する
+        // judge if the message should be dropped
         bool shouldDrop(double probability) {
             static thread_local std::mt19937 generator(std::random_device{}());
             std::uniform_real_distribution<double> distribution(0.0, 1.0);
