@@ -64,7 +64,7 @@ class Emulation {
             if (!canSend(senderPid, receiverPid)) {
                 std::cout << "[Network] Message dropped from " << senderPid
                           << " to " << receiverPid << " (not reachable or dead)\n";
-                return;
+                return false;
             }
     
             // drop a message by loss probability
@@ -78,7 +78,7 @@ class Emulation {
             if (shouldDrop(lossProb)) {
                 std::cout << "[Network] Message lost from " << senderPid
                           << " to " << receiverPid << "\n";
-                return;
+                return false;
             }
     
             // calculate delay

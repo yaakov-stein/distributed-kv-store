@@ -77,7 +77,7 @@ public:
      * @param receiverPid The process ID of the receiver.
      * @param message The message to send.
      */
-    void send(PID receiverPid, const Message& message);
+    bool send(PID receiverPid, const Message& message);
 
     /**
      * @brief Broadcasts a message to all processes reachable from the current process.
