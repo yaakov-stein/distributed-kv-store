@@ -3,6 +3,8 @@
 #include <chrono>
 #include <thread>
 
+using namespace Emu;
+
 // シナリオ1: 基本的なメッセージ送受信のテスト
 void testBasicMessage() {
     std::cout << "Running Basic Message Test\n";
@@ -14,7 +16,7 @@ void testBasicMessage() {
     // 各プロセスの動作をテストするシンプルな関数
     auto processFunc = [&em](Emulation::PID pid) {
         while (true) {
-            auto msg = em.receiveMessage();
+            auto msg = em.receiveMessage();c
             std::cout << "[Process " << pid << "] received: " << msg.second << std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
