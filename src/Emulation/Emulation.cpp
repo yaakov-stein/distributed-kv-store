@@ -35,8 +35,10 @@ Emulation::~Emulation() {
 void Emulation::spawn(PID pid, ProcessFunction fn) {
     {
         std::lock_guard<std::mutex> lock(globalMutex);
-        messageQueueMap[pid] = std::make_shared<ProcessQueue>();
-        reachableMap[pid] = std::unordered_set<PID>(); 
+        if (messageQueueMap.find(pid) == messageQueueMap.end())
+            messageQueueMap[pid] = std::make_shared<ProcessQueue>();
+        if (reachableMap.find(pid) == reachableMap.end())
+            reachableMap[pid] = std::unordered_set<PID>(); 
         isDead[pid] = false;
     }
     std::thread t([=]() {
@@ -124,12 +126,33 @@ std::pair<Emulation::PID, Emulation::Message> Emulation::receiveMessage() {
 
 bool Emulation::canSend(PID sender, PID receiver) {
     std::lock_guard<std::mutex> lock(globalMutex);
-    if (isDead[sender] || isDead[receiver])
+    // DEBUG:
+    std::cout << "[Network] Checking if " << sender << " can send to " << receiver << std::endl;
+    if (isDead[sender] || isDead[receiver]) {
+        // DEBUG: Check if the sender or receiver is dead
+        std::cout << "[Network] Message dropped from " << sender
+                  << " to " << receiver << " (sender or receiver dead) in canSend" << std::endl;
         return false;
+    }
     auto it = reachableMap.find(sender);
-    if (it != reachableMap.end())
-        return (it->second.find(receiver) != it->second.end());
-    return false;
+    // DEBUG: Check if sender exists in reachableMap
+    if (it == reachableMap.end()) {
+        std::cout << "[DEBUG] Sender " << sender << " not found in reachableMap." << std::endl;
+        return false;
+    } else {
+        // Optionally, print sender's reachable set for debugging.
+        std::cout << "[DEBUG] Sender " << sender << " reachable set: ";
+        for (const auto &target : it->second) {
+            std::cout << target << " ";
+        }
+        std::cout << std::endl;
+        // Check if receiver is in the sender's reachable set.
+        bool canSendFlag = (it->second.find(receiver) != it->second.end());
+        if (!canSendFlag) {
+            std::cout << "[DEBUG] Receiver " << receiver << " is NOT in sender " << sender << "'s reachable set." << std::endl;
+        }
+        return canSendFlag;
+    }
 }
 
 // -------------------------
@@ -154,6 +177,7 @@ void Emulation::connectNetwork(const std::vector<PID>& groupA, const std::vector
             reachableMap[b].insert(a);
         }
     }
+
     std::cout << "[Network] Connection restored between groups." << std::endl;
 }
 

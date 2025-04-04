@@ -16,7 +16,7 @@ void testBasicMessage() {
     // 各プロセスの動作をテストするシンプルな関数
     auto processFunc = [&em](Emulation::PID pid) {
         while (true) {
-            auto msg = em.receiveMessage();c
+            auto msg = em.receiveMessage();
             std::cout << "[Process " << pid << "] received: " << msg.second << std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
