@@ -5,15 +5,15 @@
 
 using namespace Emu;
 
-// シナリオ1: 基本的なメッセージ送受信のテスト
+// test1: send and recive message
 void testBasicMessage() {
     std::cout << "Running Basic Message Test\n";
     Emulation em;
-    // 全プロセスを完全に接続
+    // connect two processes
     em.connectNetwork({1}, {2});
     em.connectNetwork({2}, {1});
 
-    // 各プロセスの動作をテストするシンプルな関数
+    // send message function for each process through lambda
     auto processFunc = [&em](Emulation::PID pid) {
         while (true) {
             auto msg = em.receiveMessage();
@@ -33,11 +33,11 @@ void testBasicMessage() {
     std::this_thread::sleep_for(std::chrono::seconds(3));
 }
 
-// シナリオ2: ブロードキャストテスト
+// Senario2: Broadcast
 void testBroadcast() {
     std::cout << "Running Broadcast Test\n";
     Emulation em;
-    // 3つのプロセスを相互接続
+    // three processes connect to each other
     em.connectNetwork({1}, {2});
     em.connectNetwork({1}, {3});
     em.connectNetwork({2}, {3});
@@ -65,11 +65,11 @@ void testBroadcast() {
     std::this_thread::sleep_for(std::chrono::seconds(3));
 }
 
-// シナリオ3: ネットワークパーティションテスト
+// Senario3: Partition Network and restore connection
 void testPartition() {
     std::cout << "Running Network Partition Test\n";
     Emulation em;
-    // 2つのプロセスを完全接続
+    
     em.connectNetwork({1}, {2});
     em.connectNetwork({2}, {1});
 
@@ -86,7 +86,7 @@ void testPartition() {
 
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    // パーティションを設定して、プロセス1と2の通信を遮断
+    // partition network
     em.partitionNetwork({1}, {2});
 
     Emulation::currentPid = 1;
@@ -95,7 +95,7 @@ void testPartition() {
 
     std::this_thread::sleep_for(std::chrono::seconds(2));
 
-    // ネットワークを再接続して再度メッセージ送信
+    // restore network
     em.connectNetwork({1}, {2});
     std::cout << "Network reconnected. Process 1 sending message again.\n";
     em.send(2, "Message after reconnection");
@@ -104,7 +104,7 @@ void testPartition() {
 }
 
 int main(int argc, char* argv[]) {
-    // コマンドライン引数によってシナリオを選択する
+    // through commandline you need to specify a scenario
     if (argc < 2) {
         std::cout << "Usage: " << argv[0] << " [basic|broadcast|partition]\n";
         return 1;
