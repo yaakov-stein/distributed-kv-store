@@ -1,27 +1,32 @@
-# コンパイラとオプションの設定
+# compiler and flags
 CXX = g++
-CXXFLAGS = -std=c++11 -I./src/Emulation -Wall -Wextra
+CXXFLAGS = -std=c++17 -I./src/Emulation -I./src/Paxos -Wall -Wextra
 LDFLAGS = -pthread
 
-# ソースファイルとテストファイルの指定
-SRC = src/Emulation/Emulation.cpp
-TEST_SRC = test/Emulation/test_emulation.cpp
+# source and test 
+SRC_EMULATION = src/Emulation/Emulation.cpp
+SRC_PAXOS = src/Paxos/Paxos.cpp
+# TEST_1_SRC = test/Emulation/test_emulation.cpp
+# TEST_SRC = test/Paxos/test_paxos_cmd.cpp
+TEST_SRC = test/Paxos/test_paxos.cpp
 
-# 出力ファイルの名前
-TARGET = test_emulation
+# output file name
+TARGET = test_paxos
 
-# デフォルトターゲット: ビルド
+# target
 all: $(TARGET)
 
-# テスト用実行ファイルのビルドルール
-$(TARGET): $(SRC) $(TEST_SRC)
-	$(CXX) $(CXXFLAGS) $(SRC) $(TEST_SRC) $(LDFLAGS) -o $(TARGET)
+# build rule for each target
+# $(TARGET): $(SRC) $(TEST_SRC)
+# 	$(CXX) $(CXXFLAGS) $(SRC) $(TEST_SRC) $(LDFLAGS) -o $(TARGET)
+$(TARGET): $(SRC_EMULATION) $(SRC_PAXOS) $(TEST_SRC)
+	$(CXX) $(CXXFLAGS) $(SRC_EMULATION) $(SRC_PAXOS) $(TEST_SRC) $(LDFLAGS) -o $(TARGET)
 
-# テスト実行ターゲット：引数を渡す場合は ARGS で指定
+# test exec
 test: $(TARGET)
 	./$(TARGET) $(ARGS)
 
-# クリーンアップ
+# cleanup
 clean:
 	rm -f $(TARGET)
 

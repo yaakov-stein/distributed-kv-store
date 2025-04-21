@@ -57,11 +57,15 @@ Emulation::PID Emulation::whoami() {
 // -------------------------
 bool Emulation::send(PID receiverPid, const Message& message) {
     PID senderPid = currentPid;
-    if (!canSend(senderPid, receiverPid)) {
+
+    // Special case: clients can always send
+    bool isClient = (senderPid >= 99);  // or some other condition
+    if (!isClient && !canSend(senderPid, receiverPid)) {
         std::cout << "[Network] Message dropped from " << senderPid
                   << " to " << receiverPid << " (not reachable or dead)" << std::endl;
         return false;
     }
+
     double lossProb = 0.0;
     {
         std::lock_guard<std::mutex> lock(globalMutex);
@@ -69,11 +73,12 @@ bool Emulation::send(PID receiverPid, const Message& message) {
         if (it != lossProbabilities.end())
             lossProb = it->second;
     }
-    if (shouldDrop(lossProb)) {
+    if (!isClient && shouldDrop(lossProb)) {
         std::cout << "[Network] Message lost from " << senderPid
                   << " to " << receiverPid << std::endl;
         return false;
     }
+
     int delay = averageMessageDelay;
     {
         std::lock_guard<std::mutex> lock(globalMutex);
@@ -81,8 +86,10 @@ bool Emulation::send(PID receiverPid, const Message& message) {
         if (it != customDelays.end())
             delay = it->second;
     }
+
     int actualDelay = randomDelay(delay);
     std::this_thread::sleep_for(std::chrono::milliseconds(actualDelay));
+
     auto queuePtr = getProcessQueue(receiverPid);
     if (queuePtr) {
         std::lock_guard<std::mutex> lock(queuePtr->mtx);
@@ -90,6 +97,7 @@ bool Emulation::send(PID receiverPid, const Message& message) {
         queuePtr->cv.notify_one();
         return true;
     }
+
     return false;
 }
 
