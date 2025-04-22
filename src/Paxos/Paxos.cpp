@@ -158,8 +158,7 @@ void MultiPaxos::onElectionMessage(const Message &msg) {
         }
 
     } else if (msg.type == MessageType::VOTE && msg.candidateId == id && leaderState == LeaderState::CANDIDATE) {
-        // count votes for myself
-        if (++electionVoteCount >= config.quorumSize && leaderState != LeaderState::LEADER) {
+        if (electionVoteCount >= config.quorumSize && leaderState != LeaderState::LEADER) {
             becomeLeader();
         }
 
