@@ -37,6 +37,7 @@ struct Ballot {
         if (round == o.round) return proposerId < o.proposerId;
         return round < o.round;
     }
+    bool operator>(const Ballot &o) const { return o < *this; }
 };
 
 // ------------------------------------------------------------------
@@ -51,6 +52,7 @@ struct Command {
     Command(OpType op, const std::string &k, int v = 0)
       : operation(op), key(k), value(v) {}
 };
+
 
 // ------------------------------------------------------------------
 // A Paxos protocol message
@@ -148,12 +150,24 @@ class MultiPaxos {
     };
     std::unordered_map<int,PromiseState> promiseStates;
     std::unordered_map<int,Command>      myProposals;
-    std::unordered_map<int,int>          electionVotes;
-    std::unordered_map<int, bool> votedFor;
+
+    struct AcceptState {
+        int count = 0;
+      };
+    std::unordered_map<int,AcceptState> acceptStates;
 
     std::atomic<bool> stop;
     int               nextSlot;
+    
+    // Leader election
 
+    Ballot electionPromise{0, id};      // the highest ballot I’ve promised
+    int   electionVoteCount = 0;        // votes I’ve collected for my current electionBallot
+    Ballot electionBallot;
+    Ballot votedForBallot;       // record the highest election ballot this acceptor has voted for
+    std::unordered_map<int,int>          electionVotes;
+    std::unordered_map<int, bool> votedFor;
+    
     // Helpers for Paxos phases
     void onPrepare   (const Message &msg);
     void sendPrepare (int slot);

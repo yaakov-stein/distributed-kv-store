@@ -71,6 +71,8 @@ MultiPaxos::MultiPaxos(int id_, const Configuration &cfg_, Emu::Emulation* emula
     leaderState(LeaderState::MEMBER),
     leaderId(-1),
     currentBallot{0, id_},
+    electionBallot{0, id_},
+    votedForBallot{0, -1},
     nextSlot(0),
     stop(false)
 {
@@ -126,51 +128,83 @@ void MultiPaxos::run() {
 
 void MultiPaxos::becomeCandidate() {
     leaderState = LeaderState::CANDIDATE;
-    electionVotes.clear();
-    electionVotes[id] = 1;
-    Message m{MessageType::ELECTION, 0, {}, Command(), id, id};
-    std::cout << "[P" << id << "] Becoming CANDIDATE, broadcast ELECTION\n";
+    electionBallot.round++;
+    electionBallot.proposerId = id;
+  
+    // clear any old votes and promise
+    electionVoteCount = 1;              // implicit “vote for myself”
+    electionPromise = electionBallot;   // promise to myself
+
+    Message m{ MessageType::ELECTION, 0, {}, Command(), id, id };
+    std::cout << "[P" << id << "] Becoming CANDIDATE with ballot("
+              << electionBallot.round << "," << id << ")\n";
     broadcastMessage(m);
-    lastHeartbeat.store(std::chrono::steady_clock::now());
+    lastHeartbeat.store(clock::now());
 }
 
 void MultiPaxos::onElectionMessage(const Message &msg) {
     if (msg.type == MessageType::ELECTION) {
-        if (!votedFor[msg.candidateId]) {
-            votedFor[msg.candidateId] = true;
-            Message v{MessageType::VOTE, 0, {}, Command(), id, msg.candidateId};
-            std::cout << "[P" << id << "] onElection: voting for P" << msg.candidateId << "\n";
-            sendMessageTo(msg.senderId, v);
+        // ignore lower ballots to maintain monotonicity
+        if (msg.ballot < electionBallot) return;
+
+        // vote only if we haven't voted for a higher ballot
+        if (msg.ballot > votedForBallot) {
+            votedForBallot = msg.ballot;
+            Message voteMsg{ MessageType::VOTE, 0, {}, Command(), id, msg.candidateId };
+            std::cout << "[P" << id << "] Voting for candidate P"
+                      << msg.candidateId << " with ballot("
+                      << msg.ballot.round << "," << msg.ballot.proposerId << ")\n";
+            sendMessageTo(msg.senderId, voteMsg);
         }
-    }
-    else if (msg.type == MessageType::VOTE && msg.candidateId == id) {
-        if (++electionVotes[id] >= config.quorumSize && leaderState != LeaderState::LEADER) {
+
+    } else if (msg.type == MessageType::VOTE && msg.candidateId == id && leaderState == LeaderState::CANDIDATE) {
+        // count votes for myself
+        if (++electionVoteCount >= config.quorumSize && leaderState != LeaderState::LEADER) {
             becomeLeader();
         }
-    }
-    else if (msg.type == MessageType::LEADER_ANNOUNCE) {
-        becomeMember(msg.candidateId);
+
+    } else if (msg.type == MessageType::LEADER_ANNOUNCE) {
+        // another node became leader
+        if (msg.candidateId != id) {
+            becomeMember(msg.candidateId);
+        }
     }
 }
 
 void MultiPaxos::becomeLeader() {
     leaderState = LeaderState::LEADER;
     leaderId = id;
-    votedFor.clear();
-    Message la{MessageType::LEADER_ANNOUNCE, 0, {}, Command(), id, id};
-    nextSlot = decidedCommands.empty() ? 0 : (decidedCommands.begin()->first + 1);
-    std::cout << "[P" << id << "] Becoming LEADER, nextSlot="<<nextSlot<<"\n";
+    std::cout << "[P" << id << "] Became LEADER, announcing to cluster\n";
+
+    // announce leadership
+    Message la{ MessageType::LEADER_ANNOUNCE, 0, {}, Command(), id, id };
     broadcastMessage(la);
-    
+    currentBallot.round = std::max(currentBallot.round, electionBallot.round) + 1;
+    currentBallot.proposerId = id;
+    // send prepare for all pending slots to recover state
+    for (int slot = 0; slot < nextSlot; ++slot) {
+        if (!decidedCommands.count(slot)) {
+        std::cout << "[P" << id << "] recovering slot=" << slot
+                << " → send PREPARE ballot=("
+                << currentBallot.round << "," << id << ")\n";
+        sendPrepare(slot);
+        } else {
+            std::cout << "[P" << id << "] skipping already decided slot="
+                << slot << "\n";
+        }
+}
+
+    // start sending heartbeats immediately
     sendHeartbeat();
-    lastHeartbeat.store(std::chrono::steady_clock::now());
+    lastHeartbeat.store(clock::now());
 }
 
 void MultiPaxos::becomeMember(int newLeaderId) {
     leaderState = LeaderState::MEMBER;
     leaderId = newLeaderId;
-    std::cout << "[P" << id << "] Becoming MEMBER under leader=" << newLeaderId << "\n";
-    lastHeartbeat.store(std::chrono::steady_clock::now());
+    std::cout << "[P" << id << "] Becoming MEMBER under leader P"
+              << newLeaderId << "\n";
+    lastHeartbeat.store(clock::now());
 }
 
 //------------------------------------------------------------------------------
@@ -197,35 +231,52 @@ void MultiPaxos::sendPrepare(int slot) {
 
 void MultiPaxos::onPrepare(const Message &msg) {
     auto &prom = promisedBallots[msg.slot];
-    if (msg.ballot < prom) return;
+
+    // ignore if we already promised a higher ballot
+    if (msg.ballot < prom) {
+        std::cout << "[P" << id << "] Rejected PREPARE for slot " << msg.slot
+                  << " due to ballot (" << msg.ballot.round << "," << msg.ballot.proposerId
+                  << ") < promised (" << prom.round << "," << prom.proposerId << ")\n";
+        return;
+    }
+
+    // record promise
     prom = msg.ballot;
+
+    // include any previously accepted command
     Command prev{};
-    if (acceptedCommands.count(msg.slot))
+    if (acceptedCommands.count(msg.slot)) {
         prev = acceptedCommands[msg.slot];
-    Message promise{MessageType::PROMISE, msg.slot, msg.ballot, prev, id, 0};
-    std::cout << "[P" << id << "] onPrepare from P"<<msg.senderId
-                      <<" slot="<<msg.slot<<" → sending PROMISE\n";
-    sendMessageTo(msg.senderId, promise);
+    }
+
+    Message promiseMsg{ MessageType::PROMISE, msg.slot, msg.ballot, prev, id, 0 };
+    std::cout << "[P" << id << "] Responding with PROMISE for slot "
+              << msg.slot << "\n";
+    sendMessageTo(msg.senderId, promiseMsg);
 }
 
 void MultiPaxos::onPromise(const Message &msg) {
     auto &st = promiseStates[msg.slot];
-    if (st.count<0) return;
+    if (st.count < 0) return;
+
+    // count promises
     st.count++;
-    std::cout << "[P" << id << "] onPromise slot="<< msg.slot 
-              << " new count=" << st.count << "\n";
-    if (msg.command.operation!=Command::OpType::NOP) {
-        if (!st.seenAnyAccepted || st.highestAcceptedBallot<msg.ballot) {
+    std::cout << "[P" << id << "] Received PROMISE for slot "
+              << msg.slot << ", count=" << st.count << "\n";
+
+    // track highest accepted value if present
+    if (msg.command.operation != Command::OpType::NOP) {
+        if (!st.seenAnyAccepted || st.highestAcceptedBallot < msg.ballot) {
             st.highestAcceptedBallot = msg.ballot;
-            st.highestAcceptedValue = msg.command;
-            st.seenAnyAccepted = true;
+            st.highestAcceptedValue   = msg.command;
+            st.seenAnyAccepted        = true;
         }
     }
-    if (st.count>=config.quorumSize) {
+
+    // once quorum, send accept
+    if (st.count >= config.quorumSize) {
         st.count = -1;
         auto chosen = st.seenAnyAccepted ? st.highestAcceptedValue : myProposals[msg.slot];
-        std::cout << "[P" << id << "] onPromise from P"<<msg.senderId
-                  <<" slot="<<msg.slot<<" count="<<st.count<<"\n";
         sendAccept(msg.slot, currentBallot, chosen);
     }
 }
@@ -235,10 +286,12 @@ void MultiPaxos::onPromise(const Message &msg) {
 //------------------------------------------------------------------------------
 
 void MultiPaxos::sendAccept(int slot, const Ballot &b, const Command &c) {
+    auto &st = acceptStates[slot];
+    st.count = 1;  // implicit “accept” from leader itself
     Message m{MessageType::ACCEPT, slot, b, c, id, 0};
     std::cout << "[P" << id << "] send ACCEPT slot="<<slot
-              <<" ballot=("<<b.round<<","<<b.proposerId<<") cmd=("
-              <<c.key<<","<<c.value<<")\n";
+            <<" ballot=("<<b.round<<","<<b.proposerId<<") cmd=("
+            <<c.key<<","<<c.value<<"), self-count=1\n";
     broadcastMessage(m);
 }
 
@@ -255,15 +308,37 @@ void MultiPaxos::onAccept(const Message &msg) {
     }
 }
 
-void MultiPaxos::onAccepted(const Message &msg) {
-    decidedCommands[msg.slot]=msg.command;
-    Message dec{MessageType::DECIDE, msg.slot, msg.ballot,msg.command,id,0};
-    std::cout << "[P" << id << "] onAccepted quorum slot="<<msg.slot
-              <<" → broadcasting DECIDE\n";
-    broadcastMessage(dec);
-    onDecide(dec);
-}
 
+void MultiPaxos::onAccepted(const Message &msg) {
+    // ack state
+    auto &st = acceptStates[msg.slot];
+
+    // count ack
+    st.count++;
+    std::cout << "[P" << id << "] Received ACCEPTED for slot="
+              << msg.slot << ", count=" << st.count << "\n";
+
+    // quorum reached
+    if (st.count >= config.quorumSize) {
+
+        Message dec{
+            MessageType::DECIDE,
+            msg.slot,
+            msg.ballot,
+            msg.command,
+            id,
+            0
+        };
+        std::cout << "[P" << id << "] Quorum reached for slot="
+                  << msg.slot << " → broadcasting DECIDE\n";
+
+        // broadcast decide
+        broadcastMessage(dec);
+        onDecide(dec);
+
+        st.count = 0;
+    }
+}
 
 void MultiPaxos::onDecide(const Message &msg) {
     decidedCommands[msg.slot] = msg.command;
@@ -283,8 +358,10 @@ void MultiPaxos::sendHeartbeat() {
     broadcastMessage(m);
 }
 
-void MultiPaxos::onHeartbeat(const Message &/*msg*/) {
-    lastHeartbeat.store(clock::now());
+void MultiPaxos::onHeartbeat(const Message &msg) {
+    if (msg.senderId == leaderId) {
+        lastHeartbeat.store(clock::now());
+    }
 }
 
 void MultiPaxos::checkHeartbeat() {
@@ -310,9 +387,7 @@ void MultiPaxos::checkHeartbeat() {
 //------------------------------------------------------------------------------
 
 void MultiPaxos::onPaxosMessage(const Message &msg) {
-    if (msg.senderId == leaderId) {
-        lastHeartbeat.store(clock::now());
-    }
+
     switch(msg.type) {
       case MessageType::PREPARE:  onPrepare(msg);  break;
       case MessageType::PROMISE:  onPromise(msg);  break;
